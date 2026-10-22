@@ -1,0 +1,11 @@
+/target/
+
+# Local environment and editor files
+.env
+.env.*
+.vscode/
+.idea/
+
+# OS-specific files
+.DS_Store
+Thumbs.db
