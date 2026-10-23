@@ -2,10 +2,7 @@ use std::sync::{Arc, Mutex};
 
 use actix_web::{App, HttpServer, middleware::Logger, web::Data};
 
-use crate::{
-    orderbook::Orderbook,
-    routes::{create_order, delete_order, get_depth},
-};
+use crate::{orderbook::Orderbook, routes::configure_routes};
 
 pub mod inputs;
 pub mod orderbook;
@@ -21,9 +18,7 @@ async fn main() -> Result<(), std::io::Error> {
 
         App::new()
             .app_data(Data::new(orderbook))
-            .service(create_order)
-            .service(delete_order)
-            .service(get_depth)
+            .configure(configure_routes)
             .wrap(Logger::default())
     })
     .workers(1)

@@ -2,10 +2,15 @@
 name = "rust-orderbook"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.88"
+description = "Price-time priority limit order matching engine exposed over an Actix Web HTTP API"
+repository = "https://github.com/Rishi713144/rust-orderbook-core"
+keywords = ["orderbook", "matching-engine", "trading", "actix-web"]
+categories = ["finance", "web-programming"]
+publish = false
 
 [dependencies]
 actix-web = "4.11.0"
 env_logger = "0.11"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.141"
-
