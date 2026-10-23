@@ -60,7 +60,17 @@ impl Orderbook {
         }
     }
 
-    pub fn create_order(&mut self, price: u32, quantity: u32, user_id: u32, side: Side) -> u32 {
+    pub fn create_order(
+        &mut self,
+        price: u32,
+        quantity: u32,
+        user_id: u32,
+        side: Side,
+    ) -> Result<u32, &'static str> {
+        if quantity == 0 {
+            return Err("quantity must be greater than zero");
+        }
+
         self.order_id_counter += 1;
 
         let order = Order {
@@ -80,7 +90,7 @@ impl Orderbook {
 
         let _trades = self.process_limit_order(order);
 
-        order_id
+        Ok(order_id)
     }
 
     pub fn get_depth(&self) -> Depth {
@@ -150,14 +160,23 @@ impl Orderbook {
             .collect();
 
         for ask_price in matchable_asks {
+            let mut skipped: VecDeque<Order> = VecDeque::new();
+
             while buy_order.remaining_quantity() > 0 {
-                let Some(mut sell_order) = self
+                let Some(resting_order) = self
                     .asks
                     .get_mut(&ask_price)
                     .and_then(|queue| queue.pop_front())
                 else {
                     break;
                 };
+
+                if resting_order.user_id == buy_order.user_id {
+                    skipped.push_back(resting_order);
+                    continue;
+                }
+
+                let mut sell_order = resting_order;
 
                 let trade_quantity = std::cmp::min(
                     buy_order.remaining_quantity(),
@@ -191,6 +210,12 @@ impl Orderbook {
                 }
             }
 
+            if let Some(queue) = self.asks.get_mut(&ask_price) {
+                while let Some(order) = skipped.pop_back() {
+                    queue.push_front(order);
+                }
+            }
+
             if self.asks.get(&ask_price).is_some_and(VecDeque::is_empty) {
                 self.asks.remove(&ask_price);
             }
@@ -205,18 +230,28 @@ impl Orderbook {
         let matchable_bids: Vec<u32> = self
             .bids
             .range(sell_order.price..)
+            .rev()
             .map(|(price, _)| *price)
             .collect();
 
         for bid_price in matchable_bids {
+            let mut skipped: VecDeque<Order> = VecDeque::new();
+
             while sell_order.remaining_quantity() > 0 {
-                let Some(mut buy_order) = self
+                let Some(resting_order) = self
                     .bids
                     .get_mut(&bid_price)
                     .and_then(|queue| queue.pop_front())
                 else {
                     break;
                 };
+
+                if resting_order.user_id == sell_order.user_id {
+                    skipped.push_back(resting_order);
+                    continue;
+                }
+
+                let mut buy_order = resting_order;
 
                 let trade_quantity = std::cmp::min(
                     buy_order.remaining_quantity(),
@@ -247,6 +282,12 @@ impl Orderbook {
                     if let Some(queue) = self.bids.get_mut(&bid_price) {
                         queue.push_front(buy_order);
                     }
+                }
+            }
+
+            if let Some(queue) = self.bids.get_mut(&bid_price) {
+                while let Some(order) = skipped.pop_back() {
+                    queue.push_front(order);
                 }
             }
 
@@ -287,8 +328,8 @@ mod tests {
     #[test]
     fn fully_matched_orders_do_not_rest_in_book() {
         let mut book = Orderbook::new();
-        let buy_id = book.create_order(100, 10, 1, Side::Buy);
-        let sell_id = book.create_order(100, 10, 2, Side::Sell);
+        let buy_id = book.create_order(100, 10, 1, Side::Buy).unwrap();
+        let sell_id = book.create_order(100, 10, 2, Side::Sell).unwrap();
 
         assert!(book.bids.is_empty());
         assert!(book.asks.is_empty());
@@ -300,8 +341,8 @@ mod tests {
     #[test]
     fn incoming_order_fully_filled_keeps_resting_order() {
         let mut book = Orderbook::new();
-        let sell_id = book.create_order(100, 10, 2, Side::Sell);
-        let buy_id = book.create_order(100, 5, 1, Side::Buy);
+        let sell_id = book.create_order(100, 10, 2, Side::Sell).unwrap();
+        let buy_id = book.create_order(100, 5, 1, Side::Buy).unwrap();
 
         assert!(book.bids.is_empty());
         assert_eq!(book.asks[&100].len(), 1);
@@ -313,11 +354,11 @@ mod tests {
     #[test]
     fn matches_best_price_then_time_priority() {
         let mut book = Orderbook::new();
-        let first = book.create_order(100, 5, 1, Side::Sell);
-        let second = book.create_order(100, 5, 2, Side::Sell);
-        let worse = book.create_order(101, 5, 3, Side::Sell);
+        let first = book.create_order(100, 5, 1, Side::Sell).unwrap();
+        let second = book.create_order(100, 5, 2, Side::Sell).unwrap();
+        let worse = book.create_order(101, 5, 3, Side::Sell).unwrap();
 
-        let buy_id = book.create_order(101, 7, 4, Side::Buy);
+        let buy_id = book.create_order(101, 7, 4, Side::Buy).unwrap();
 
         assert_eq!(book.orders[&first].status, OrderStatus::Filled);
         assert_eq!(book.orders[&second].filled_quantity, 2);
@@ -330,15 +371,51 @@ mod tests {
     #[test]
     fn depth_reports_remaining_quantity_in_price_order() {
         let mut book = Orderbook::new();
-        book.create_order(100, 5, 1, Side::Buy);
-        book.create_order(99, 3, 2, Side::Buy);
-        book.create_order(101, 4, 3, Side::Sell);
-        book.create_order(102, 2, 4, Side::Sell);
+        book.create_order(100, 5, 1, Side::Buy).unwrap();
+        book.create_order(99, 3, 2, Side::Buy).unwrap();
+        book.create_order(101, 4, 3, Side::Sell).unwrap();
+        book.create_order(102, 2, 4, Side::Sell).unwrap();
 
         let depth = book.get_depth();
 
         assert_eq!(depth.bids, vec![[100, 5], [99, 3]]);
         assert_eq!(depth.asks, vec![[101, 4], [102, 2]]);
         assert_eq!(depth.last_update_id, "4");
+    }
+
+    #[test]
+    fn sell_matches_highest_bid_first() {
+        let mut book = Orderbook::new();
+        let low = book.create_order(100, 5, 1, Side::Buy).unwrap();
+        let high = book.create_order(101, 5, 2, Side::Buy).unwrap();
+        let sell_id = book.create_order(100, 5, 3, Side::Sell).unwrap();
+
+        assert_eq!(book.orders[&high].status, OrderStatus::Filled);
+        assert_eq!(book.orders[&low].filled_quantity, 0);
+        assert_eq!(book.orders[&sell_id].status, OrderStatus::Filled);
+        assert!(book.asks.is_empty());
+        assert_eq!(book.bids[&100][0].order_id, low);
+    }
+
+    #[test]
+    fn rejects_zero_quantity_orders() {
+        let mut book = Orderbook::new();
+
+        assert!(book.create_order(100, 0, 1, Side::Buy).is_err());
+        assert_eq!(book.order_id_counter, 0);
+        assert!(book.orders.is_empty());
+    }
+
+    #[test]
+    fn same_user_orders_do_not_match() {
+        let mut book = Orderbook::new();
+        let sell_id = book.create_order(100, 10, 1, Side::Sell).unwrap();
+        let buy_id = book.create_order(100, 5, 1, Side::Buy).unwrap();
+
+        assert_eq!(book.trade_id_counter, 0);
+        assert_eq!(book.orders[&sell_id].filled_quantity, 0);
+        assert_eq!(book.orders[&buy_id].filled_quantity, 0);
+        assert_eq!(book.asks[&100][0].order_id, sell_id);
+        assert_eq!(book.bids[&100][0].order_id, buy_id);
     }
 }

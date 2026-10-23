@@ -23,11 +23,13 @@ pub async fn create_order(
 
     // maintain orderbook logic
     let mut orderbook = orderbook.lock().unwrap();
-    let order_id = orderbook.create_order(price, quantity, user_id, side);
 
-    HttpResponse::Ok().json(CreateOrderResponse {
-        order_id: order_id.to_string(),
-    })
+    match orderbook.create_order(price, quantity, user_id, side) {
+        Ok(order_id) => HttpResponse::Ok().json(CreateOrderResponse {
+            order_id: order_id.to_string(),
+        }),
+        Err(message) => HttpResponse::BadRequest().body(message),
+    }
 }
 
 #[delete("/order")]
